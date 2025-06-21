@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"runtime"
+	"strings"
 
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 )
@@ -22,8 +23,9 @@ func main() {
 
 func run() error {
 	overlayDir := flag.String("overlay", "", "Directory for overlay, defaults to a new temporary directory")
+	goPath := flag.String("go", "go", "Path to Go toolchain")
 	flag.Parse()
-	o := Overlay{Patches: flag.Args(), OverlayDir: *overlayDir}
+	o := Overlay{Patches: flag.Args(), OverlayDir: *overlayDir, GoPath: *goPath}
 	jsonPath, err := o.Generate()
 	if err != nil {
 		return err
@@ -35,6 +37,7 @@ func run() error {
 type Overlay struct {
 	Patches    []string
 	OverlayDir string
+	GoPath     string
 	Goroot     string
 }
 
@@ -56,6 +59,22 @@ func (o Overlay) Generate() (string, error) {
 	return jsonPath, err
 }
 
+func (o *Overlay) resolveGOROOT() error {
+	if o.Goroot != "" {
+		return nil
+	}
+	if o.GoPath == "" {
+		o.GoPath = "go"
+	}
+	cmd := exec.Command(o.GoPath, "env", "GOROOT")
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("resolving GOROOT: %w", err)
+	}
+	o.Goroot = strings.TrimSpace(string(b))
+	return nil
+}
+
 func (o *Overlay) generate(j *overlayJSON) error {
 	if o.OverlayDir == "" {
 		tmpDir, err := ioutil.TempDir("", "go-patch-overlay")
@@ -71,8 +90,8 @@ func (o *Overlay) generate(j *overlayJSON) error {
 		return err
 	}
 
-	if o.Goroot == "" {
-		o.Goroot = runtime.GOROOT()
+	if err := o.resolveGOROOT(); err != nil {
+		return err
 	}
 
 	if err := os.RemoveAll(o.OverlayDir); err != nil {
