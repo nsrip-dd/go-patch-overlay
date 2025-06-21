@@ -119,26 +119,34 @@ func (o Overlay) applyPatch(pathPath string, j *overlayJSON) error {
 		overlayPath := filepath.Join(o.OverlayDir, file.NewName)
 		srcPath := filepath.Join(o.Goroot, file.OldName)
 		if err := os.MkdirAll(filepath.Dir(overlayPath), 0755); err != nil {
-			return err
+			return fmt.Errorf("making overlay path: %w", err)
 		}
-		if _, err := os.Stat(overlayPath); os.IsNotExist(err) {
+		if file.OldName == "" {
+			// This is a new file. We still want to give it a
+			// "source" path in the overlay so the compiler knows
+			// it's there
+			srcPath = filepath.Join(o.Goroot, file.NewName)
+		} else if _, err := os.Stat(overlayPath); os.IsNotExist(err) {
 			if err := copyFile(srcPath, overlayPath); err != nil {
-				return err
+				return fmt.Errorf("copying %s to %s: %s", srcPath, overlayPath, err)
 			}
 		} else if err != nil {
-			return err
+			return fmt.Errorf("stat %s: %s", overlayPath, err)
 		}
 
-		beforeData, err := ioutil.ReadFile(overlayPath)
-		if err != nil {
-			return err
+		var beforeData []byte
+		if file.OldName != "" {
+			beforeData, err = ioutil.ReadFile(overlayPath)
+			if err != nil {
+				return fmt.Errorf("reading %s: %s", overlayPath, err)
+			}
 		}
 		afterData := &bytes.Buffer{}
 		if err := gitdiff.NewApplier(bytes.NewReader(beforeData)).ApplyFile(afterData, file); err != nil {
 			return err
 		}
 		if err := ioutil.WriteFile(overlayPath, afterData.Bytes(), 0644); err != nil {
-			return err
+			return fmt.Errorf("writing %s: %s", overlayPath, err)
 		}
 		j.Replace[srcPath] = overlayPath
 	}
