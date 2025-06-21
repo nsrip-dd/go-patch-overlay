@@ -116,8 +116,14 @@ func (o Overlay) applyPatch(pathPath string, j *overlayJSON) error {
 		return err
 	}
 	for _, file := range files {
-		overlayPath := filepath.Join(o.OverlayDir, file.NewName)
 		srcPath := filepath.Join(o.Goroot, file.OldName)
+		if file.NewName == "" {
+			// Having an empty string as the replacement path in the
+			// overlay tells the compiler the file doesn't exist
+			j.Replace[srcPath] = ""
+			continue
+		}
+		overlayPath := filepath.Join(o.OverlayDir, file.NewName)
 		if err := os.MkdirAll(filepath.Dir(overlayPath), 0755); err != nil {
 			return fmt.Errorf("making overlay path: %w", err)
 		}
