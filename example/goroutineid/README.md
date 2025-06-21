@@ -5,5 +5,5 @@ An example for using the go-patch-overlay tool to hack a `runtime.Getid()` funct
 To run the code, you need to invoke `go` like this:
 
 ```
-$ go run -overlay="$(go-patch-overlay ./patches)"
+$ go run -overlay="$(go-patch-overlay ./patches/getgid.patch)"
 ```

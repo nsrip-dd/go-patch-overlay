@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 )
@@ -22,8 +21,9 @@ func main() {
 }
 
 func run() error {
+	overlayDir := flag.String("overlay", "", "Directory for overlay, defaults to a new temporary directory")
 	flag.Parse()
-	o := Overlay{PatchDir: flag.Arg(0), OverlayDir: flag.Arg(1)}
+	o := Overlay{Patches: flag.Args(), OverlayDir: *overlayDir}
 	jsonPath, err := o.Generate()
 	if err != nil {
 		return err
@@ -33,7 +33,7 @@ func run() error {
 }
 
 type Overlay struct {
-	PatchDir   string
+	Patches    []string
 	OverlayDir string
 	Goroot     string
 }
@@ -78,13 +78,8 @@ func (o *Overlay) generate(j *overlayJSON) error {
 	if err := os.RemoveAll(o.OverlayDir); err != nil {
 		return err
 	}
-	patches, err := filepath.Glob(filepath.Join(o.PatchDir, "*.patch"))
-	if err != nil {
-		return err
-	}
-	sort.Strings(patches)
 
-	for _, patch := range patches {
+	for _, patch := range o.Patches {
 		if err := o.applyPatch(patch, j); err != nil {
 			return err
 		}
