@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"runtime"
-	"sort"
+	"strings"
 
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 )
@@ -22,8 +22,10 @@ func main() {
 }
 
 func run() error {
+	overlayDir := flag.String("overlay", "", "Directory for overlay, defaults to a new temporary directory")
+	goPath := flag.String("go", "go", "Path to Go toolchain")
 	flag.Parse()
-	o := Overlay{PatchDir: flag.Arg(0), OverlayDir: flag.Arg(1)}
+	o := Overlay{Patches: flag.Args(), OverlayDir: *overlayDir, GoPath: *goPath}
 	jsonPath, err := o.Generate()
 	if err != nil {
 		return err
@@ -33,8 +35,9 @@ func run() error {
 }
 
 type Overlay struct {
-	PatchDir   string
+	Patches    []string
 	OverlayDir string
+	GoPath     string
 	Goroot     string
 }
 
@@ -56,6 +59,22 @@ func (o Overlay) Generate() (string, error) {
 	return jsonPath, err
 }
 
+func (o *Overlay) resolveGOROOT() error {
+	if o.Goroot != "" {
+		return nil
+	}
+	if o.GoPath == "" {
+		o.GoPath = "go"
+	}
+	cmd := exec.Command(o.GoPath, "env", "GOROOT")
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("resolving GOROOT: %w", err)
+	}
+	o.Goroot = strings.TrimSpace(string(b))
+	return nil
+}
+
 func (o *Overlay) generate(j *overlayJSON) error {
 	if o.OverlayDir == "" {
 		tmpDir, err := ioutil.TempDir("", "go-patch-overlay")
@@ -71,20 +90,15 @@ func (o *Overlay) generate(j *overlayJSON) error {
 		return err
 	}
 
-	if o.Goroot == "" {
-		o.Goroot = runtime.GOROOT()
+	if err := o.resolveGOROOT(); err != nil {
+		return err
 	}
 
 	if err := os.RemoveAll(o.OverlayDir); err != nil {
 		return err
 	}
-	patches, err := filepath.Glob(filepath.Join(o.PatchDir, "*.patch"))
-	if err != nil {
-		return err
-	}
-	sort.Strings(patches)
 
-	for _, patch := range patches {
+	for _, patch := range o.Patches {
 		if err := o.applyPatch(patch, j); err != nil {
 			return err
 		}
@@ -102,29 +116,43 @@ func (o Overlay) applyPatch(pathPath string, j *overlayJSON) error {
 		return err
 	}
 	for _, file := range files {
-		overlayPath := filepath.Join(o.OverlayDir, file.NewName)
 		srcPath := filepath.Join(o.Goroot, file.OldName)
-		if err := os.MkdirAll(filepath.Dir(overlayPath), 0755); err != nil {
-			return err
+		if file.NewName == "" {
+			// Having an empty string as the replacement path in the
+			// overlay tells the compiler the file doesn't exist
+			j.Replace[srcPath] = ""
+			continue
 		}
-		if _, err := os.Stat(overlayPath); os.IsNotExist(err) {
+		overlayPath := filepath.Join(o.OverlayDir, file.NewName)
+		if err := os.MkdirAll(filepath.Dir(overlayPath), 0755); err != nil {
+			return fmt.Errorf("making overlay path: %w", err)
+		}
+		if file.OldName == "" {
+			// This is a new file. We still want to give it a
+			// "source" path in the overlay so the compiler knows
+			// it's there
+			srcPath = filepath.Join(o.Goroot, file.NewName)
+		} else if _, err := os.Stat(overlayPath); os.IsNotExist(err) {
 			if err := copyFile(srcPath, overlayPath); err != nil {
-				return err
+				return fmt.Errorf("copying %s to %s: %s", srcPath, overlayPath, err)
 			}
 		} else if err != nil {
-			return err
+			return fmt.Errorf("stat %s: %s", overlayPath, err)
 		}
 
-		beforeData, err := ioutil.ReadFile(overlayPath)
-		if err != nil {
-			return err
+		var beforeData []byte
+		if file.OldName != "" {
+			beforeData, err = ioutil.ReadFile(overlayPath)
+			if err != nil {
+				return fmt.Errorf("reading %s: %s", overlayPath, err)
+			}
 		}
 		afterData := &bytes.Buffer{}
 		if err := gitdiff.NewApplier(bytes.NewReader(beforeData)).ApplyFile(afterData, file); err != nil {
 			return err
 		}
 		if err := ioutil.WriteFile(overlayPath, afterData.Bytes(), 0644); err != nil {
-			return err
+			return fmt.Errorf("writing %s: %s", overlayPath, err)
 		}
 		j.Replace[srcPath] = overlayPath
 	}
